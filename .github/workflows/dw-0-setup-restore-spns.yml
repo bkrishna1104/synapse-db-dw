@@ -55,6 +55,8 @@ jobs:
           ACCESS: ${{ matrix.access }}
           GHENV: ${{ matrix.gh_env }}
           REPO: ${{ github.repository }}
+          OWNER_ID: ${{ github.repository_owner_id }}
+          REPO_ID: ${{ github.repository_id }}
           RG: ${{ vars.DW_RESOURCE_GROUP }}
           SRV: ${{ vars.DW_SERVER_NAME }}
         run: |
@@ -65,6 +67,8 @@ jobs:
             -Access $env:ACCESS `
             -GitHubRepository $env:REPO `
             -GitHubEnvironment $env:GHENV `
+            -GitHubOwnerId $env:OWNER_ID `
+            -GitHubRepositoryId $env:REPO_ID `
             -SubscriptionId $env:AZURE_SUBSCRIPTION_ID `
             -ResourceGroupName $env:RG `
             -ServerName $env:SRV
