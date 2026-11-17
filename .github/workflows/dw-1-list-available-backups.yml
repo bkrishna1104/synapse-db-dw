@@ -1,0 +1,60 @@
+name: DW | 1. List Available Backups
+
+# Read-only. Shows every restore point with a copy-paste ID for "DW | 2. Restore Backup to New Database".
+on:
+  workflow_dispatch:
+    inputs:
+      source_database:
+        description: Which DW to list
+        type: choice
+        default: all
+        options:
+          - all
+          - ifrs17_dw_prd
+          - ifrs17_dw_prd_plai
+
+permissions:
+  id-token: write      # GitHub OIDC -> Entra ID (read-only SPN, no secret)
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    environment: dw-restore-read     # read-only SPN; no approval needed
+    timeout-minutes: 20
+    env:
+      TZ: UTC
+      AZURE_CLIENT_ID: ${{ vars.AZURE_READER_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Az PowerShell modules
+        shell: pwsh
+        run: |
+          foreach ($m in 'Az.Accounts', 'Az.Sql') {
+            if (-not (Get-Module -ListAvailable -Name $m)) {
+              Install-Module $m -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            }
+          }
+
+      - name: List backups
+        id: list
+        shell: pwsh
+        env:
+          RG: ${{ vars.DW_RESOURCE_GROUP }}
+          SRV: ${{ vars.DW_SERVER_NAME }}
+          PICK: ${{ inputs.source_database }}
+          ALL_DBS: ${{ vars.DW_SOURCE_DATABASES || 'ifrs17_dw_prd,ifrs17_dw_prd_plai' }}
+        run: |
+          $dbs = if ($env:PICK -eq 'all') { $env:ALL_DBS -split ',' } else { @($env:PICK) }
+          ./scripts/Get-DwBackups.ps1 -ResourceGroupName $env:RG -ServerName $env:SRV `
+            -Databases $dbs -OutDir "$env:RUNNER_TEMP/backups"
+
+      - name: Upload list (CSV + JSON)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dw-backups-${{ github.run_number }}
+          path: ${{ runner.temp }}/backups/
+          retention-days: 7

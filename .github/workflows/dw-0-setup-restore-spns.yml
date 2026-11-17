@@ -1,0 +1,86 @@
+name: DW | 0. One-time Setup - Restore SPNs (Admin)
+
+# Creates two secretless SPNs:
+#   operator - used by "DW | 2. Restore Backup to New Database"; trusted only by environment "dw-restore" (reviewers)
+#   reader   - used by "DW | 1. List Available Backups"; read-only; trusted only by environment "dw-restore-read"
+on:
+  workflow_dispatch:
+    inputs:
+      spn_name_prefix:
+        description: Display name prefix for the SPNs
+        type: string
+        default: spn-gha-dw-restore
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    environment: azure-admin         # required reviewers; holds the ADMIN identity
+    env:
+      TZ: UTC
+      AZURE_CLIENT_ID: ${{ vars.AZURE_ADMIN_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      HAS_GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN != '' }}
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - access: operator
+            gh_env: dw-restore
+            var_name: AZURE_RESTORE_CLIENT_ID
+          - access: reader
+            gh_env: dw-restore-read
+            var_name: AZURE_READER_CLIENT_ID
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Az PowerShell modules
+        shell: pwsh
+        run: |
+          foreach ($m in 'Az.Accounts', 'Az.Resources', 'Az.Sql') {
+            if (-not (Get-Module -ListAvailable -Name $m)) {
+              Install-Module $m -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            }
+          }
+
+      - name: Create / verify ${{ matrix.access }} SPN
+        id: spn
+        shell: pwsh
+        env:
+          NAME: ${{ inputs.spn_name_prefix }}-${{ matrix.access }}
+          ACCESS: ${{ matrix.access }}
+          GHENV: ${{ matrix.gh_env }}
+          REPO: ${{ github.repository }}
+          RG: ${{ vars.DW_RESOURCE_GROUP }}
+          SRV: ${{ vars.DW_SERVER_NAME }}
+        run: |
+          Import-Module ./scripts/DwCommon.psm1 -Force
+          Connect-DwAzure -Force
+          ./scripts/Provision-RestoreSpn.ps1 `
+            -DisplayName $env:NAME `
+            -Access $env:ACCESS `
+            -GitHubRepository $env:REPO `
+            -GitHubEnvironment $env:GHENV `
+            -SubscriptionId $env:AZURE_SUBSCRIPTION_ID `
+            -ResourceGroupName $env:RG `
+            -ServerName $env:SRV
+
+      - name: Publish client ID to environment ${{ matrix.gh_env }}
+        if: env.HAS_GH_TOKEN == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_ADMIN_TOKEN }}
+          CLIENT_ID: ${{ steps.spn.outputs.client_id }}
+        run: |
+          gh variable set "${{ matrix.var_name }}" --env "${{ matrix.gh_env }}" --body "$CLIENT_ID" --repo "$GITHUB_REPOSITORY"
+          echo "Set ${{ matrix.var_name }} on environment ${{ matrix.gh_env }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Manual follow-up
+        if: env.HAS_GH_TOKEN != 'true'
+        env:
+          CLIENT_ID: ${{ steps.spn.outputs.client_id }}
+        run: |
+          echo "Set variable ${{ matrix.var_name }}=$CLIENT_ID on GitHub environment '${{ matrix.gh_env }}'." >> "$GITHUB_STEP_SUMMARY"

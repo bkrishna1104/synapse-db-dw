@@ -1,0 +1,16 @@
+{
+  "Name": "SQL DW Restore Point Reader",
+  "IsCustom": true,
+  "Description": "Read-only: list SQL DW databases and their restore points. Used to populate the restore dropdown.",
+  "Actions": [
+    "Microsoft.Sql/servers/read",
+    "Microsoft.Sql/servers/databases/read",
+    "Microsoft.Sql/servers/databases/restorePoints/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/__SUBSCRIPTION_ID__"
+  ]
+}

@@ -1,0 +1,109 @@
+name: DW | 2. Restore Backup to New Database
+
+# Takes a restore point ID from "DW | 1. List Available Backups" and creates a NEW database from it.
+# Never overwrites, deletes or pauses anything.
+on:
+  workflow_dispatch:
+    inputs:
+      restore_point:
+        description: "Restore point ID from 'DW | 1. List Available Backups', e.g. ifrs17_dw_prd@2025-11-17T05:33:42Z. Or 'latest'. Or 'new' (take a fresh backup first, then restore it)."
+        type: string
+        required: true
+      target_database_name:
+        description: "New database name, e.g. ifrs17_dw_prd_dc_17_11_25. Must start with <source>_dc_ and must not exist."
+        type: string
+        required: true
+      source_database:
+        description: "Only used with 'latest' or 'new' (an ID already names its database)."
+        type: choice
+        default: ifrs17_dw_prd
+        options:
+          - ifrs17_dw_prd
+          - ifrs17_dw_prd_plai
+      service_objective:
+        description: "Size of the new pool. same-as-source copies the source's DWU."
+        type: choice
+        default: same-as-source
+        options:
+          - same-as-source
+          - DW100c
+          - DW200c
+          - DW300c
+          - DW400c
+          - DW500c
+          - DW1000c
+          - DW1500c
+          - DW2000c
+      new_backup_label:
+        description: "Only with 'new': label for the fresh backup. Blank = auto."
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  id-token: write      # GitHub OIDC -> Entra ID (operator SPN, no secret)
+  contents: read
+
+concurrency:
+  group: dw-restore-${{ inputs.target_database_name }}
+  cancel-in-progress: false      # never cancel a restore half-way
+
+run-name: "Restore ${{ inputs.restore_point }} -> ${{ inputs.target_database_name }}"
+
+jobs:
+  restore:
+    # GitHub-hosted runners stop every job at 6 h in total. For a full 6 h wait plus setup,
+    # set repo variable DW_RUNNER to a self-hosted runner label.
+    runs-on: ${{ vars.DW_RUNNER || 'ubuntu-latest' }}
+    environment: dw-restore          # required reviewers approve each restore
+    timeout-minutes: ${{ fromJSON(vars.DW_JOB_TIMEOUT_MINUTES || '390') }}
+    env:
+      TZ: UTC
+      AZURE_CLIENT_ID: ${{ vars.AZURE_RESTORE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Az PowerShell modules
+        shell: pwsh
+        run: |
+          foreach ($m in 'Az.Accounts', 'Az.Sql') {
+            if (-not (Get-Module -ListAvailable -Name $m)) {
+              Install-Module $m -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            }
+          }
+
+      - name: Restore (waits up to 6 h)
+        id: restore
+        shell: pwsh
+        env:
+          RP: ${{ inputs.restore_point }}
+          TGT: ${{ inputs.target_database_name }}
+          SRC: ${{ inputs.source_database }}
+          SLO: ${{ inputs.service_objective }}
+          LBL: ${{ inputs.new_backup_label }}
+          RG: ${{ vars.DW_RESOURCE_GROUP }}
+          SRV: ${{ vars.DW_SERVER_NAME }}
+          ALLOWED: ${{ vars.DW_SOURCE_DATABASES || 'ifrs17_dw_prd,ifrs17_dw_prd_plai' }}
+          TIMEOUT: ${{ vars.DW_OP_TIMEOUT_MINUTES || '360' }}
+        run: |
+          ./scripts/Invoke-DwRestore.ps1 `
+            -RestorePoint $env:RP `
+            -TargetDatabaseName $env:TGT `
+            -SourceDatabaseName $env:SRC `
+            -ServiceObjective $env:SLO `
+            -NewBackupLabel $env:LBL `
+            -ResourceGroupName $env:RG `
+            -ServerName $env:SRV `
+            -AllowedSourceDatabases ($env:ALLOWED -split ',') `
+            -TimeoutMinutes ([int]$env:TIMEOUT)
+
+      - name: If this run stopped early
+        if: always() && steps.restore.outcome != 'success'
+        run: |
+          {
+            echo "### Run did not finish cleanly"
+            echo "If Azure had already accepted the backup or restore, it keeps running there; this pipeline never cancels it."
+            echo "Check the new database in the portal, or run **DW | 1. List Available Backups**."
+          } >> "$GITHUB_STEP_SUMMARY"

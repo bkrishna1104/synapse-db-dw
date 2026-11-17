@@ -1,0 +1,95 @@
+name: DW | 9. TEST - Sample DW, Transactions & Verify
+
+# TEST ONLY. Creates a Synapse dedicated SQL pool with sample tables, makes transactions,
+# checks restored copies, and pauses pools to save money. Refuses RG/server names containing prd/prod.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do
+        type: choice
+        default: create-and-load
+        options:
+          - create-and-load
+          - add-transactions
+          - verify
+          - pause-all
+          - resume
+      database_name:
+        description: "Test pool (source) name. For 'resume': the pool to resume."
+        type: string
+        default: ifrs17_dw_prd
+      sku:
+        description: Size when creating the test pool (billed per hour while Online)
+        type: choice
+        default: DW100c
+        options: [DW100c, DW200c]
+      batch_name:
+        description: "Label for this batch of transactions. Blank = A (create) / B-<HHmm> (add)."
+        type: string
+        default: ""
+      simulate_bad_change:
+        description: "add-transactions only: afterwards delete half the sales and zero all prices, to practise recovery"
+        type: boolean
+        default: false
+      verify_database_name:
+        description: "verify only: the restored pool to check, e.g. ifrs17_dw_prd_dc_test1"
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: dw-test-harness
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    environment: test-harness        # test admin identity + SQL admin password secret
+    timeout-minutes: 60
+    env:
+      TZ: UTC
+      AZURE_CLIENT_ID: ${{ vars.AZURE_TEST_ADMIN_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Az PowerShell modules
+        shell: pwsh
+        run: |
+          foreach ($m in 'Az.Accounts', 'Az.Resources', 'Az.Sql') {
+            if (-not (Get-Module -ListAvailable -Name $m)) {
+              Install-Module $m -Scope CurrentUser -Force -AllowClobber -Repository PSGallery
+            }
+          }
+
+      - name: ${{ inputs.action }}
+        shell: pwsh
+        env:
+          TEST_SQL_ADMIN_PASSWORD: ${{ secrets.TEST_SQL_ADMIN_PASSWORD }}
+          ACTION: ${{ inputs.action }}
+          DB: ${{ inputs.database_name }}
+          SKU: ${{ inputs.sku }}
+          BATCH: ${{ inputs.batch_name }}
+          BAD: ${{ inputs.simulate_bad_change }}
+          VERIFY_DB: ${{ inputs.verify_database_name }}
+          RG: ${{ vars.DW_RESOURCE_GROUP }}
+          SRV: ${{ vars.DW_SERVER_NAME }}
+          LOC: ${{ vars.TEST_LOCATION || 'centralindia' }}
+          LOGIN: ${{ vars.TEST_SQL_ADMIN_LOGIN || 'sqladminuser' }}
+        run: |
+          ./scripts/test/Invoke-TestHarness.ps1 `
+            -Action $env:ACTION `
+            -ResourceGroupName $env:RG `
+            -ServerName $env:SRV `
+            -DatabaseName $env:DB `
+            -Location $env:LOC `
+            -Sku $env:SKU `
+            -SqlAdminLogin $env:LOGIN `
+            -BatchName $env:BATCH `
+            -SimulateBadChange:($env:BAD -eq 'true') `
+            -VerifyDatabaseName $env:VERIFY_DB

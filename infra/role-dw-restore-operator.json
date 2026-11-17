@@ -1,0 +1,20 @@
+{
+  "Name": "SQL DW Restore Operator (Non-Destructive)",
+  "IsCustom": true,
+  "Description": "Read SQL DW databases, create user-defined restore points, and restore to a NEW database. No delete, pause, resume, export, firewall, auth or RBAC rights.",
+  "Actions": [
+    "Microsoft.Sql/servers/read",
+    "Microsoft.Sql/servers/databases/read",
+    "Microsoft.Sql/servers/databases/write",
+    "Microsoft.Sql/servers/databases/restorePoints/read",
+    "Microsoft.Sql/servers/databases/restorePoints/write",
+    "Microsoft.Sql/servers/databases/operationResults/read",
+    "Microsoft.Sql/servers/databases/azureAsyncOperation/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/__SUBSCRIPTION_ID__"
+  ]
+}

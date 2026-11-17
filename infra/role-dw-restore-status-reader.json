@@ -1,0 +1,14 @@
+{
+  "Name": "SQL DW Restore Operation Status Reader",
+  "IsCustom": true,
+  "Description": "Read-only: lets the restore SPN poll long-running SQL operation status, which Azure exposes at subscription/location scope.",
+  "Actions": [
+    "Microsoft.Sql/locations/*/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/__SUBSCRIPTION_ID__"
+  ]
+}
