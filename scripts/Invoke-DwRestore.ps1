@@ -7,6 +7,7 @@
   - an ID copied from the "DW | 1. List Available Backups" run, e.g. ifrs17_dw_prd@2025-11-17T05:33:42Z
   - latest : newest restore point of -SourceDatabaseName
   - new    : take a fresh user-defined restore point (backup) first, then restore it
+  - backup-only : take a fresh restore point and stop (no restore, no target needed)
 
 .DESCRIPTION
   Guardrails: the target name must be new, must differ from the source and must start with
@@ -18,7 +19,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$RestorePoint,
-    [Parameter(Mandatory)][string]$TargetDatabaseName,
+    [string]$TargetDatabaseName = '',       # required unless -RestorePoint backup-only
     [Parameter(Mandatory)][string]$ResourceGroupName,
     [Parameter(Mandatory)][string]$ServerName,
     [string]$SourceDatabaseName = '',       # used for 'latest' / 'new'; or to confirm an ID's DB
@@ -37,7 +38,7 @@ Import-Module (Join-Path $PSScriptRoot 'DwCommon.psm1') -Force
 $Tag      = '_dc_'
 $started  = Get-Date
 $deadline = $started.AddMinutes($TimeoutMinutes)
-$mode     = switch -Regex ($RestorePoint.Trim()) { '^(?i)latest$' { 'latest' } '^(?i)new$' { 'new' } default { 'id' } }
+$mode     = switch -Regex ($RestorePoint.Trim()) { '^(?i)latest$' { 'latest' } '^(?i)new$' { 'new' } '^(?i)backup-only$' { 'backup-only' } default { 'id' } }
 
 function Get-DbOrNull([string]$Name) {
     try { Get-AzSqlDatabase -ResourceGroupName $ResourceGroupName -ServerName $ServerName -DatabaseName $Name -ErrorAction Stop }
@@ -71,6 +72,9 @@ if ($ServiceObjective -eq 'same-as-source') { $ServiceObjective = $source.Curren
 
 # ---------------------------------------------------------------- Target name guards (fail fast)
 $TargetDatabaseName = $TargetDatabaseName.Trim()
+if ($mode -eq 'backup-only') {
+    if ($TargetDatabaseName) { Write-Warning "target_database_name is ignored for backup-only." }
+} else {
 if (-not $TargetDatabaseName) { throw "target_database_name is required." }
 if ($TargetDatabaseName -notmatch '^[A-Za-z0-9_]{1,128}$') { throw "Target name may contain only letters, digits and underscore." }
 if ($TargetDatabaseName -ieq $SourceDatabaseName)          { throw "Target cannot be the source database." }
@@ -81,10 +85,11 @@ if (Get-DbOrNull $TargetDatabaseName) {
     throw "Target '$TargetDatabaseName' already exists on $ServerName. This pipeline never overwrites; choose a new name."
 }
 Write-Host "Target name '$TargetDatabaseName' is valid and free."
+}
 
 # ---------------------------------------------------------------- Resolve restore point
 $pit = $null
-if ($mode -ne 'new') {
+if ($mode -notin 'new', 'backup-only') {
     $points = Get-Points
     if (-not $points) { throw "No restore points found for '$SourceDatabaseName'." }
     if ($mode -eq 'latest') {
@@ -125,6 +130,23 @@ else {
     }
     $pit = $rp.CreatedUtc
     Write-Summary "Backup **$label** taken at $($pit.ToString('yyyy-MM-ddTHH:mm:ssZ')) (IST $((ConvertTo-Ist $pit).ToString('dd-MMM-yyyy HH:mm'))) in $(Elapsed)."
+
+    if ($mode -eq 'backup-only') {
+        $id = Format-DwRestorePointId ([pscustomobject]@{ Database = $SourceDatabaseName; CreatedUtc = $pit })
+        Set-Output 'restore_point_id' $id
+        Write-Summary ""
+        Write-Summary "## Backup taken - nothing restored"
+        Write-Summary ""
+        Write-Summary "| Item | Value |"
+        Write-Summary "|---|---|"
+        Write-Summary "| Restore point ID | ``$id`` |"
+        Write-Summary "| Label | $label |"
+        Write-Summary "| Taken (IST) | $((ConvertTo-Ist $pit).ToString('dd-MMM-yyyy HH:mm:ss')) |"
+        Write-Summary "| Available until (approx.) | $((ConvertTo-Ist $pit.AddDays(7)).ToString('dd-MMM-yyyy HH:mm')) IST |"
+        Write-Summary ""
+        Write-Summary "To restore it later, run this pipeline with ``restore_point`` = ``$id`` and a new target name."
+        return
+    }
 }
 
 $pointId = Format-DwRestorePointId ([pscustomobject]@{ Database = $SourceDatabaseName; CreatedUtc = $pit })
