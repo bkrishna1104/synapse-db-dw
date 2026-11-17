@@ -6,15 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       restore_point:
-        description: "Restore point ID from 'DW | 1. List Available Backups', e.g. ifrs17_dw_prd@2025-11-17T05:33:42Z. Or 'latest'. Or 'new' (take a fresh backup first, then restore it)."
+        description: "Restore point ID from 'DW | 1. List Available Backups', e.g. ifrs17_dw_prd@2025-11-17T05:33:42Z. Or 'latest'. Or 'new' (take a backup, then restore it). Or 'backup-only' (just take a backup)."
         type: string
         required: true
       target_database_name:
-        description: "New database name, e.g. ifrs17_dw_prd_dc_17_11_25. Must start with <source>_dc_ and must not exist."
+        description: "New database name, e.g. ifrs17_dw_prd_dc_17_11_25. Must start with <source>_dc_ and must not exist. Leave blank for backup-only."
         type: string
-        required: true
+        required: false
+        default: ""
       source_database:
-        description: "Only used with 'latest' or 'new' (an ID already names its database)."
+        description: "Used with 'latest', 'new' and 'backup-only' (an ID already names its database)."
         type: choice
         default: ifrs17_dw_prd
         options:
@@ -35,7 +36,7 @@ on:
           - DW1500c
           - DW2000c
       new_backup_label:
-        description: "Only with 'new': label for the fresh backup. Blank = auto."
+        description: "With 'new' or 'backup-only': label for the backup. Blank = auto."
         type: string
         required: false
         default: ""
@@ -45,10 +46,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: dw-restore-${{ inputs.target_database_name }}
+  group: dw-restore-${{ inputs.target_database_name || inputs.source_database }}
   cancel-in-progress: false      # never cancel a restore half-way
 
-run-name: "Restore ${{ inputs.restore_point }} -> ${{ inputs.target_database_name }}"
+run-name: "${{ inputs.restore_point == 'backup-only' && format('Backup {0}', inputs.source_database) || format('Restore {0} -> {1}', inputs.restore_point, inputs.target_database_name) }}"
 
 jobs:
   restore:
