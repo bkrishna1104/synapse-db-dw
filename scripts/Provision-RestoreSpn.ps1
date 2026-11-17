@@ -16,6 +16,10 @@ param(
     [Parameter(Mandatory)][string]$DisplayName,
     [Parameter(Mandatory)][string]$GitHubRepository,     # org/repo
     [Parameter(Mandatory)][string]$GitHubEnvironment,    # e.g. dw-restore
+    # Newer repos send an ID-based subject: repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>.
+    # Pass both IDs to trust that format as well (the workflow passes them automatically).
+    [string]$GitHubOwnerId = '',
+    [string]$GitHubRepositoryId = '',
     [Parameter(Mandatory)][string]$SubscriptionId,
     [Parameter(Mandatory)][string]$ResourceGroupName,
     [Parameter(Mandatory)][string]$ServerName,
@@ -99,18 +103,24 @@ foreach ($cred in @(Get-AzADAppCredential -ObjectId $app.Id -ErrorAction Silentl
     Remove-AzADAppCredential -ObjectId $app.Id -KeyId $cred.KeyId
 }
 
-# ---------------------------------------------------------------- 3. Federated credential
-$subject  = "repo:${GitHubRepository}:environment:${GitHubEnvironment}"
+# ---------------------------------------------------------------- 3. Federated credentials
 $issuer   = 'https://token.actions.githubusercontent.com'
-$fedName  = ('gha-' + ($GitHubRepository -replace '[^A-Za-z0-9-]', '-') + '-' + $GitHubEnvironment)
-if ($fedName.Length -gt 120) { $fedName = $fedName.Substring(0, 120) }
-
-$fed = @(Get-AzADAppFederatedCredential -ApplicationObjectId $app.Id) | Where-Object { $_.Subject -eq $subject -and $_.Issuer -eq $issuer }
-if (-not $fed) {
+$subjects = [ordered]@{ 'name' = "repo:${GitHubRepository}:environment:${GitHubEnvironment}" }
+if ($GitHubOwnerId -and $GitHubRepositoryId) {
+    $owner, $repoName = $GitHubRepository.Split('/')
+    $subjects['ids'] = "repo:${owner}@${GitHubOwnerId}/${repoName}@${GitHubRepositoryId}:environment:${GitHubEnvironment}"
+}
+$existingFed = @(Get-AzADAppFederatedCredential -ApplicationObjectId $app.Id)
+foreach ($kind in $subjects.Keys) {
+    $subject = $subjects[$kind]
+    if ($existingFed | Where-Object { $_.Subject -eq $subject -and $_.Issuer -eq $issuer }) { continue }
+    $fedName = ('gha-' + $GitHubEnvironment + '-' + $kind + '-' + ($GitHubRepository -replace '[^A-Za-z0-9-]', '-'))
+    if ($fedName.Length -gt 120) { $fedName = $fedName.Substring(0, 120) }
     Write-Host "Adding federated credential for $subject"
     $null = New-AzADAppFederatedCredential -ApplicationObjectId $app.Id -Name $fedName `
         -Issuer $issuer -Subject $subject -Audience 'api://AzureADTokenExchange'
 }
+$subject = ($subjects.Values -join '<br>')
 
 # ---------------------------------------------------------------- 4. Role assignments
 function Ensure-Assignment($RoleDef, [string]$Scope) {
@@ -155,6 +165,6 @@ Write-Summary "|---|---|"
 Write-Summary "| Display name | $DisplayName |"
 Write-Summary "| Client ID | $($app.AppId) |"
 Write-Summary "| Secrets | none (GitHub OIDC only) |"
-Write-Summary "| Trusted subject | $subject |"
+Write-Summary "| Trusted subjects | $subject |"
 Write-Summary "| Role | $($serverRole.Name) @ server $ServerName |"
 if ($statusRole) { Write-Summary "| Role | $($statusRole.Name) @ subscription (read-only) |" }
