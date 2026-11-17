@@ -7,7 +7,7 @@
     "Microsoft.Sql/servers/databases/read",
     "Microsoft.Sql/servers/databases/write",
     "Microsoft.Sql/servers/databases/restorePoints/read",
-    "Microsoft.Sql/servers/databases/restorePoints/write",
+    "Microsoft.Sql/servers/databases/restorePoints/action",
     "Microsoft.Sql/servers/databases/operationResults/read",
     "Microsoft.Sql/servers/databases/azureAsyncOperation/read"
   ],
