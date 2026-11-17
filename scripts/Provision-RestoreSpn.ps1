@@ -51,9 +51,30 @@ $serverScope = "$subScope/resourceGroups/$ResourceGroupName/providers/Microsoft.
 $null = Get-AzSqlServer -ResourceGroupName $ResourceGroupName -ServerName $ServerName
 
 # ---------------------------------------------------------------- 1. Role definitions
+# Every action must exist in Azure's own operation list; otherwise role creation fails with
+# InvalidActionOrNotAction. Check up front so a wrong name gives a clear message.
+$script:SqlOps = $null
+function Assert-ActionsExist([string[]]$Actions, [string]$RoleName) {
+    if (-not $script:SqlOps) {
+        $script:SqlOps = @(Get-AzProviderOperation -OperationSearchString 'Microsoft.Sql/*' | ForEach-Object { $_.Operation.ToLowerInvariant() })
+    }
+    $missing = @()
+    foreach ($a in $Actions) {
+        if ($a.Contains('*')) {
+            $rx = '^' + [regex]::Escape($a.ToLowerInvariant()).Replace('\*', '.*') + '$'
+            if (-not ($script:SqlOps -match $rx)) { $missing += $a }
+        } elseif ($script:SqlOps -notcontains $a.ToLowerInvariant()) { $missing += $a }
+    }
+    if ($missing) {
+        $hint = ($script:SqlOps | Where-Object { $_ -like 'microsoft.sql/servers/databases/restorepoints*' -or $_ -like 'microsoft.sql/servers/databases/*operation*' }) -join "`n  "
+        throw "Role '$RoleName' lists actions Azure doesn't know: $($missing -join ', ').`nRelated actions Azure does know:`n  $hint"
+    }
+}
+
 function Ensure-RoleDefinition([string]$File) {
     $json    = (Get-Content -Raw $File) -replace '__SUBSCRIPTION_ID__', $SubscriptionId
     $desired = $json | ConvertFrom-Json
+    Assert-ActionsExist @($desired.Actions) $desired.Name
     $existing = Get-AzRoleDefinition -Name $desired.Name -Scope $subScope -ErrorAction SilentlyContinue
 
     if (-not $existing) {
