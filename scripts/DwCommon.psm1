@@ -35,6 +35,7 @@ function ConvertTo-Ist {
 # GitHub OIDC tokens are short-lived and Azure access tokens last about 1 hour, so a
 # 6-hour wait needs a fresh login. This asks GitHub for a new OIDC token every 30 minutes.
 $script:LastLogin = [datetime]::MinValue
+$script:LoginChecked = $false
 
 function Connect-DwAzure {
     param([switch]$Force)
@@ -46,6 +47,31 @@ function Connect-DwAzure {
         }
         $uri = $env:ACTIONS_ID_TOKEN_REQUEST_URL + '&audience=api://AzureADTokenExchange'
         $jwt = (Invoke-RestMethod -Uri $uri -Headers @{ Authorization = "Bearer $($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" }).value
+
+        if (-not $script:LoginChecked) {
+            # Az PowerShell hides the real Entra error behind "Could not find tenant id". Exchange the
+            # token directly once so a failure shows the AADSTS code and the subject GitHub sent.
+            $payload = $jwt.Split('.')[1].Replace('-', '+').Replace('_', '/')
+            $payload += '=' * ((4 - $payload.Length % 4) % 4)
+            $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
+            Write-Host "GitHub OIDC subject: $($claims.sub)"
+            try {
+                $null = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$($env:AZURE_TENANT_ID)/oauth2/v2.0/token" -Body @{
+                    client_id             = $env:AZURE_CLIENT_ID
+                    client_assertion_type = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
+                    client_assertion      = $jwt
+                    scope                 = 'https://management.azure.com/.default'
+                    grant_type            = 'client_credentials'
+                }
+                Write-Host "Entra token exchange OK for client $($env:AZURE_CLIENT_ID)"
+            } catch {
+                $detail = $_.ErrorDetails.Message
+                try { $detail = ($detail | ConvertFrom-Json).error_description } catch { }
+                throw "Entra sign-in failed for client $($env:AZURE_CLIENT_ID) in tenant $($env:AZURE_TENANT_ID). GitHub subject was '$($claims.sub)'. Entra says: $detail"
+            }
+            $script:LoginChecked = $true
+        }
+
         $null = Connect-AzAccount -ServicePrincipal -ApplicationId $env:AZURE_CLIENT_ID -Tenant $env:AZURE_TENANT_ID `
             -FederatedToken $jwt -Subscription $env:AZURE_SUBSCRIPTION_ID -Scope Process -WarningAction SilentlyContinue
         Write-Host "[$((Get-Date).ToUniversalTime().ToString('HH:mm:ss'))Z] Azure login refreshed"
