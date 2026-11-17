@@ -114,8 +114,21 @@ $app = if ($apps.Count -eq 1) { $apps[0] } else {
 
 $sp = Get-AzADServicePrincipal -ApplicationId $app.AppId -ErrorAction SilentlyContinue
 if (-not $sp) {
-    Write-Host "Creating service principal"
-    $sp = New-AzADServicePrincipal -ApplicationId $app.AppId
+    # A brand-new app takes a little while to replicate in Entra; until then Graph rejects the
+    # service principal ("backing application ... must be in the local tenant"). Retry.
+    for ($i = 1; $i -le 12; $i++) {
+        try {
+            Write-Host "Creating service principal (attempt $i)"
+            $sp = New-AzADServicePrincipal -ApplicationId $app.AppId -ErrorAction Stop
+            break
+        } catch {
+            $sp = Get-AzADServicePrincipal -ApplicationId $app.AppId -ErrorAction SilentlyContinue
+            if ($sp) { break }
+            if ($i -eq 12) { throw }
+            Write-Host "Not ready yet: $($_.Exception.Message.Split([Environment]::NewLine)[0]). Waiting 15 s..."
+            Start-Sleep -Seconds 15
+        }
+    }
 }
 
 # Some Az versions add a password when creating an SPN. This identity must be secretless.
