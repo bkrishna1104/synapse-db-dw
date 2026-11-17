@@ -150,9 +150,25 @@ foreach ($kind in $subjects.Keys) {
     if ($existingFed | Where-Object { $_.Subject -eq $subject -and $_.Issuer -eq $issuer }) { continue }
     $fedName = ('gha-' + $GitHubEnvironment + '-' + $kind + '-' + ($GitHubRepository -replace '[^A-Za-z0-9-]', '-'))
     if ($fedName.Length -gt 120) { $fedName = $fedName.Substring(0, 120) }
-    Write-Host "Adding federated credential for $subject"
-    $null = New-AzADAppFederatedCredential -ApplicationObjectId $app.Id -Name $fedName `
-        -Issuer $issuer -Subject $subject -Audience 'api://AzureADTokenExchange'
+    for ($i = 1; $i -le 8; $i++) {
+        try {
+            Write-Host "Adding federated credential for $subject (attempt $i)"
+            $null = New-AzADAppFederatedCredential -ApplicationObjectId $app.Id -Name $fedName `
+                -Issuer $issuer -Subject $subject -Audience 'api://AzureADTokenExchange' -ErrorAction Stop
+            break
+        } catch {
+            # Back-to-back writes to a new app can briefly conflict ("duplicate values"). Re-check, then retry.
+            Start-Sleep -Seconds 15
+            $now = @(Get-AzADAppFederatedCredential -ApplicationObjectId $app.Id)
+            if ($now | Where-Object { $_.Subject -eq $subject -and $_.Issuer -eq $issuer }) { Write-Host "Present now."; break }
+            if ($i -eq 8) {
+                $list = ($now | ForEach-Object { "$($_.Name) -> $($_.Subject)" }) -join '; '
+                throw "Could not add federated credential '$subject': $($_.Exception.Message). Existing: $list"
+            }
+            Write-Host "Not added yet: $($_.Exception.Message.Split([Environment]::NewLine)[0])"
+        }
+    }
+    Start-Sleep -Seconds 10   # let Entra settle before the next write to this app
 }
 $subject = ($subjects.Values -join '<br>')
 
